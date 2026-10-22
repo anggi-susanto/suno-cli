@@ -220,7 +220,7 @@ fn headless_generation_recovery_and_download_contracts_are_explicit() {
             .iter()
             .find(|o| o["name"] == "--source")
             .unwrap()["values"],
-        serde_json::json!(["auto", "studio", "library"])
+        serde_json::json!(["auto", "studio", "library", "playback"])
     );
     assert!(
         info["commands"]["download"]["transport"]

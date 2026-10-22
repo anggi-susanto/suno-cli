@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.10.2 — Playback URL downloads
+
+- Added `suno download --source playback` to use clip metadata URLs for MP3/MP4 without signed download preparation. Atomic transfers, container validation, and MP3 lyric tagging remain enabled.
+- Playback rejects WAV/M4A, missing or non-HTTPS URLs, and incomplete clips; failures do not fall back to signed preparation.
+- Batch download retry commands now preserve the selected source.
+
+### Usage
+
+```bash
+suno download <clip_id> --source playback --output ./songs/
+suno download <clip_id> --source playback --format mp4 --output ./videos/
+```
+
+MP3 uses `audio_url`; MP4 uses `video_url`. The default `--source auto` behavior is unchanged. Playback does not perform billing lookup, library authorization, format conversion, or signed URL preparation. Playback URLs can expire or return an unsupported container; those failures are reported rather than silently switching sources. Use only media you have permission to access.
+
+### Verification
+
+- All 195 local tests passed, including playback URL selection, format restrictions, URL validation, and CLI parsing.
+- `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo build --release` passed locally on macOS ARM64.
+- The installed release binary reports `suno 0.10.2`. Live Suno downloads have not been tested for this release; cross-platform builds are handled by the release workflow.
+
 ## v0.10.1 — v6 catalogue, resumable jobs, and signed downloads
 
 - Added Turnstile provider detection, numeric `--token-provider`, and the website's hCaptcha fallback. Captcha calls have absolute deadlines; `--quiet` keeps failures machine-readable.

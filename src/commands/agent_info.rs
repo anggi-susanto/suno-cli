@@ -350,10 +350,10 @@ fn domain_annotations() -> serde_json::Map<String, Value> {
                 "options": [
                     {"name": "--output", "type": "string", "required": false, "default": ". (config `output_dir`)", "description": "Output directory"},
                     {"name": "--format", "type": "string", "required": false, "default": "mp3", "values": ["mp3", "wav", "m4a", "mp4"], "description": "Prepared file format"},
-                    {"name": "--source", "type": "string", "required": false, "default": "auto", "values": ["auto", "studio", "library"], "description": "Preparation route; auto uses Studio when the account has access, otherwise the library route"},
+                    {"name": "--source", "type": "string", "required": false, "default": "auto", "values": ["auto", "studio", "library", "playback"], "description": "auto selects Studio/library; playback uses metadata URLs without signed preparation (MP3/MP4 only)"},
                     {"name": "--video", "type": "bool", "required": false, "default": false, "description": "Compatibility shortcut for --format mp4; conflicts with an explicit --format"}
                 ],
-                "transport": "All formats use Suno's signed download-preparation APIs. Prepared URLs are short-lived HTTPS URLs; auto selects Studio when the account has access and otherwise uses the library route."
+                "transport": "By default, formats use Suno's signed download-preparation APIs. Prepared URLs are short-lived HTTPS URLs; auto selects Studio when the account has access and otherwise uses the library route. Explicit playback uses clip audio_url (MP3) or video_url (MP4), without signed preparation or fallback; URLs must use HTTPS and clips must be complete. WAV/M4A are unsupported in playback mode."
             }),
         ),
         (

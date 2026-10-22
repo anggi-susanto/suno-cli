@@ -20,7 +20,10 @@ pub async fn download_clip(
     let source = client.download_source(source, format).await?;
     let url = client.prepare_download(clip, format, source).await?;
     match transfer(clip, output_dir, format.extension(), &url, quiet).await {
-        Err(CliError::Http(e)) if matches!(e.status().map(|s| s.as_u16()), Some(401 | 403)) => {
+        Err(CliError::Http(e))
+            if source != crate::cli::DownloadSource::Playback
+                && matches!(e.status().map(|s| s.as_u16()), Some(401 | 403)) =>
+        {
             let fresh = client
                 .prepared_download_url(&clip.id, format, source)
                 .await?;

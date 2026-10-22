@@ -831,6 +831,11 @@ async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
                 argv.extend([
                     "--format".to_string(),
                     format.extension().to_string(),
+                    "--source".to_string(),
+                    clap::ValueEnum::to_possible_value(&source)
+                        .expect("download source has a CLI value")
+                        .get_name()
+                        .to_string(),
                     "--output".to_string(),
                     out_dir,
                 ]);

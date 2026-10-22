@@ -789,7 +789,7 @@ pub struct DownloadArgs {
     #[arg(long, value_enum, default_value_t = DownloadFormat::Mp3, conflicts_with = "video")]
     pub format: DownloadFormat,
 
-    /// auto uses Studio when the account has access, otherwise the library route
+    /// auto selects Studio/library; playback uses metadata URLs (MP3/MP4 only)
     #[arg(long, value_enum, default_value_t = DownloadSource::Auto)]
     pub source: DownloadSource,
 }
@@ -1061,6 +1061,7 @@ pub enum DownloadSource {
     Auto,
     Studio,
     Library,
+    Playback,
 }
 fn percentage(value: &str) -> Result<f64, String> {
     let n: f64 = value

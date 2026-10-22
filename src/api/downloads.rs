@@ -23,6 +23,14 @@ impl SunoClient {
         source: DownloadSource,
         format: DownloadFormat,
     ) -> Result<DownloadSource, CliError> {
+        if source == DownloadSource::Playback
+            && !matches!(format, DownloadFormat::Mp3 | DownloadFormat::Mp4)
+        {
+            return Err(CliError::InvalidInput(
+                "playback supports MP3 and MP4 only; use auto, studio, or library for WAV/M4A"
+                    .into(),
+            ));
+        }
         if source != DownloadSource::Auto {
             return Ok(source);
         }
@@ -56,6 +64,26 @@ impl SunoClient {
             )));
         }
         let source = self.download_source(source, format).await?;
+        if source == DownloadSource::Playback {
+            let url = match format {
+                DownloadFormat::Mp4 => clip.video_url.as_deref(),
+                _ => clip.audio_url.as_deref(),
+            }
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| {
+                CliError::Download(format!(
+                    "clip {} has no {} playback URL",
+                    clip.id,
+                    format.extension()
+                ))
+            })?;
+            let parsed = reqwest::Url::parse(url)
+                .map_err(|_| CliError::Download("invalid playback URL".into()))?;
+            if parsed.scheme() != "https" || parsed.host_str().is_none() {
+                return Err(CliError::Download("playback URL must use HTTPS".into()));
+            }
+            return Ok(url.to_owned());
+        }
         if source == DownloadSource::Library && clip.is_download_unlocked != Some(true) {
             // Authorize once per invocation, outside all preparation/transfer
             // retries. A later invocation re-fetches the unlock flag first.
@@ -126,6 +154,11 @@ impl SunoClient {
         format: DownloadFormat,
         source: DownloadSource,
     ) -> Result<String, CliError> {
+        if source == DownloadSource::Playback {
+            return Err(CliError::InvalidInput(
+                "playback URLs come from clip metadata, not signed preparation".into(),
+            ));
+        }
         if source == DownloadSource::Library && format == DownloadFormat::Wav {
             return self.library_wav_url(id).await;
         }

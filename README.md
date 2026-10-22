@@ -375,7 +375,7 @@ The CLI writes a durable receipt before submission. Reusing a request ID with th
 
 ### Signed downloads
 
-Downloads use Suno's signed preparation APIs:
+Downloads use Suno's signed preparation APIs by default:
 
 ```bash
 suno download <id1> <id2> --format mp3 --source auto --output ./songs/
@@ -394,6 +394,15 @@ suno download <id1> <id2> --output ./songs/
 ```
 
 Files use slug format: `title-slug-clipid8.mp3` — no overwrites when Suno generates 2 variations.
+
+To use the clip's playback URL instead of signed download preparation:
+
+```bash
+suno download <id> --source playback --output ./songs/
+suno download <id> --source playback --format mp4 --output ./videos/
+```
+
+Playback uses `audio_url` for MP3 and `video_url` for MP4, without billing lookup, library authorization, or signed preparation. Clips must be complete and the metadata URL must use HTTPS. WAV/M4A are not supported in this mode; no conversion is performed. Playback URLs may expire or return a different media format. Transfers still validate the container and use an atomic `.part` file; MP3 lyric tagging remains enabled. A playback failure never falls back to signed preparation. Use this only for media you have permission to access.
 
 ### Models
 
