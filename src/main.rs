@@ -8,6 +8,8 @@ mod download;
 mod errors;
 mod guard;
 mod output;
+mod remote_pool;
+mod timings;
 
 use clap::Parser;
 
@@ -166,6 +168,24 @@ async fn resolve_captcha(
 }
 
 async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
+    let remote_download = match &cli.command {
+        Commands::Generate(args) => args.download.is_some() && !args.dry_run,
+        Commands::Describe(args) => args.download.is_some() && !args.dry_run,
+        Commands::Cover(args) => args.download.is_some(),
+        Commands::Remaster(args) => args.download.is_some(),
+        Commands::Status(args) => args.download.is_some(),
+        Commands::Download(_) => true,
+        _ => false,
+    };
+    if cli.source == DownloadSource::RemotePool && remote_download {
+        let format = match &cli.command {
+            Commands::Download(args) if args.video => DownloadFormat::Mp4,
+            Commands::Download(args) => args.format,
+            _ => DownloadFormat::Mp3,
+        };
+        remote_pool::validate_format(format)?;
+        remote_pool::RemotePool::from_env()?.preflight().await?;
+    }
     match cli.command {
         Commands::Auth(mut args) => {
             if args.cookie_stdin {
@@ -445,7 +465,7 @@ async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
                     &c,
                     clips,
                     args.wait,
-                    args.download.as_deref(),
+                    args.download.as_deref().map(|dir| (dir, cli.source)),
                     fmt,
                     cli.quiet,
                     &cfg,
@@ -481,7 +501,7 @@ async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
                 &c,
                 clips,
                 args.wait,
-                args.download.as_deref(),
+                args.download.as_deref().map(|dir| (dir, cli.source)),
                 fmt,
                 cli.quiet,
                 &cfg,
@@ -531,7 +551,7 @@ async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
                     &c,
                     clips,
                     args.wait,
-                    args.download.as_deref(),
+                    args.download.as_deref().map(|dir| (dir, cli.source)),
                     fmt,
                     cli.quiet,
                     &cfg,
@@ -559,7 +579,7 @@ async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
                 &c,
                 clips,
                 args.wait,
-                args.download.as_deref(),
+                args.download.as_deref().map(|dir| (dir, cli.source)),
                 fmt,
                 cli.quiet,
                 &cfg,
@@ -644,7 +664,7 @@ async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
                 &c,
                 clips,
                 args.wait,
-                args.download.as_deref(),
+                args.download.as_deref().map(|dir| (dir, cli.source)),
                 fmt,
                 cli.quiet,
                 &cfg,
@@ -684,7 +704,7 @@ async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
                 &c,
                 clips,
                 args.wait,
-                args.download.as_deref(),
+                args.download.as_deref().map(|dir| (dir, cli.source)),
                 fmt,
                 cli.quiet,
                 &cfg,
@@ -745,7 +765,7 @@ async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
                 &c,
                 clips,
                 args.wait,
-                args.download.as_deref(),
+                args.download.as_deref().map(|dir| (dir, cli.source)),
                 fmt,
                 cli.quiet,
                 &cfg,
@@ -763,7 +783,7 @@ async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
             } else {
                 args.format
             };
-            let source = c.download_source(args.source, format).await?;
+            let source = c.download_source(cli.source, format).await?;
             if clips.is_empty() {
                 return Err(CliError::NotFound(format!("clip: {}", args.ids.join(", "))));
             }
@@ -1069,6 +1089,7 @@ async fn run(cli: Cli, fmt: OutputFormat) -> Result<(), CliError> {
 
 #[tokio::main]
 async fn main() {
+    let started = std::time::Instant::now();
     // Pre-scan argv for --json before clap runs so help, version, and parse
     // errors honor it too (clap hasn't populated the Cli struct on those
     // paths).
@@ -1113,33 +1134,62 @@ async fn main() {
         }
     };
 
+    if cli.timings {
+        timings::enable(started);
+    }
     // JSON stderr must be one parseable error envelope, never mixed progress.
     cli.quiet |= json_mode;
     let fmt = OutputFormat::detect(cli.json);
     // Race the command against Ctrl-C so the solver Chrome is torn down on
     // every exit path — it must never outlive the invocation.
     let result = tokio::select! {
-        r = run(cli, fmt) => r,
+        r = async {
+            let _timing = timings::span("command.run");
+            run(cli, fmt).await
+        } => r,
         _ = tokio::signal::ctrl_c() => {
             captcha::shutdown().await;
-            eprintln!("Interrupted");
+            if let Some(report) = timings::snapshot() {
+                if json_mode {
+                    output::json::error_details_with_timings(
+                        "interrupted", "Interrupted", "Inspect saved jobs before retrying a generation",
+                        None, Some(&report),
+                    );
+                } else {
+                    timings::print(&report, false);
+                    eprintln!("Interrupted");
+                }
+            } else {
+                eprintln!("Interrupted");
+            }
             std::process::exit(130);
         }
     };
-    captcha::shutdown().await;
+    {
+        let _timing = timings::span("browser.shutdown");
+        captcha::shutdown().await;
+    }
+    let report = timings::snapshot();
     if let Err(e) = result {
         if json_mode {
-            output::json::error_details(
+            output::json::error_details_with_timings(
                 e.error_code(),
                 &e.to_string(),
                 e.suggestion(),
                 e.details(),
+                report.as_ref(),
             );
         } else {
+            if let Some(report) = &report {
+                timings::print(report, false);
+            }
             eprintln!("Error [{}]: {}", e.error_code(), e);
             eprintln!("Hint: {}", e.suggestion());
         }
         std::process::exit(e.exit_code());
+    }
+    if let Some(report) = report {
+        timings::print(&report, json_mode);
     }
 }
 

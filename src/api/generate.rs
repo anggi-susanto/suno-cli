@@ -50,6 +50,7 @@ impl SunoClient {
     /// Wrapped in `with_auth_retry` so a single stale-JWT failure recovers
     /// transparently via Clerk refresh.
     pub async fn generate(&self, req: &GenerateRequest) -> Result<Vec<Clip>, CliError> {
+        let _timing = crate::timings::span("generation.request");
         if let Some(ids) = crate::commands::jobs::existing(req)? {
             return self.get_existing_clips(&ids).await;
         }
@@ -57,6 +58,7 @@ impl SunoClient {
         let receipt = crate::commands::jobs::prepare(req)?;
         let result = self
             .with_auth_retry(|| async {
+                let _timing = crate::timings::span("generation.submit_http");
                 let resp = self.post("/api/generate/v2-web/").json(req).send().await?;
                 let resp = self.check_response(resp).await?;
                 let result: GenerateResponse = resp.json().await?;
@@ -106,6 +108,7 @@ impl SunoClient {
         timeout_secs: u64,
         interval_secs: u64,
     ) -> Result<Vec<Clip>, CliError> {
+        let _poll = crate::timings::span("generation.poll");
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         let mut delay = std::time::Duration::from_secs(interval_secs.max(1));
         let cap = std::time::Duration::from_secs(interval_secs.max(15));

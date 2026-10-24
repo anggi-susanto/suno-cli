@@ -37,7 +37,7 @@ pub(crate) async fn handle_generation(
     c: &SunoClient,
     clips: Vec<crate::api::types::Clip>,
     wait: bool,
-    download_dir: Option<&str>,
+    download_dir: Option<(&str, DownloadSource)>,
     fmt: OutputFormat,
     quiet: bool,
     cfg: &config::AppConfig,
@@ -59,9 +59,9 @@ pub(crate) async fn handle_generation(
         clips
     };
     let mut failure = None;
-    if let Some(dir) = download_dir {
+    if let Some((dir, requested_source)) = download_dir {
         let source = c
-            .download_source(DownloadSource::Auto, DownloadFormat::Mp3)
+            .download_source(requested_source, DownloadFormat::Mp3)
             .await
             .map_err(|e| generation_recovery(e, &ids))?;
         for clip in &mut clips {

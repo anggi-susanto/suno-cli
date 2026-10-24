@@ -214,13 +214,8 @@ fn headless_generation_recovery_and_download_contracts_are_explicit() {
         serde_json::json!(["mp3", "wav", "m4a", "mp4"])
     );
     assert_eq!(
-        info["commands"]["download"]["options"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|o| o["name"] == "--source")
-            .unwrap()["values"],
-        serde_json::json!(["auto", "studio", "library", "playback"])
+        info["global_flags"]["--source"]["values"],
+        serde_json::json!(["auto", "studio", "library", "remote-pool"])
     );
     assert!(
         info["commands"]["download"]["transport"]
@@ -279,4 +274,41 @@ fn config_metadata_present() {
     let info = agent_info();
     assert!(info["config"]["path"].is_string());
     assert_eq!(info["config"]["env_prefix"], "SUNO_");
+}
+
+#[test]
+fn help_documents_remote_pool_and_separate_lrc_export() {
+    for (args, expected) in [
+        (
+            vec!["--help"],
+            vec![
+                "--source remote-pool",
+                "Create → wait → download",
+                "downloads do not create .lrc files",
+            ],
+        ),
+        (
+            vec!["download", "--help"],
+            vec![
+                "MP3/WAV only",
+                "no automatic fallback",
+                "timed-lyrics CLIP_UUID --lrc",
+            ],
+        ),
+        (
+            vec!["timed-lyrics", "--help"],
+            vec![
+                "Suno API authentication",
+                "not the remote worker pool",
+                "automatically create LRC",
+            ],
+        ),
+    ] {
+        let out = suno().args(args).output().unwrap();
+        assert!(out.status.success());
+        let help = String::from_utf8(out.stdout).unwrap();
+        for text in expected {
+            assert!(help.contains(text), "missing {text:?} in help: {help}");
+        }
+    }
 }

@@ -8,6 +8,7 @@ impl SunoClient {
     /// above the trust threshold — letting callers skip the Chrome-piloted
     /// hCaptcha solve entirely. Verified live 2026-07-18.
     pub async fn captcha_check(&self, ctype: &str) -> Result<CaptchaCheckResponse, CliError> {
+        let _timing = crate::timings::span("captcha.preflight");
         self.with_auth_retry(|| async {
             let resp = self
                 .post("/api/c/check")

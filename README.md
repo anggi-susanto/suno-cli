@@ -308,6 +308,45 @@ suno --headless generate --title "Night Drive" --tags "indie rock" --lyrics-file
 suno --no-browser generate --title "Night Drive" --tags "indie rock" --lyrics-file song.txt
 ```
 
+### Timing diagnostics
+
+Use global `--timings` to collect local stage durations without changing browser,
+retry, or generation behavior:
+
+```bash
+# Offline: verify reporting without an account or browser
+suno jobs --json --timings > jobs.json 2> timings.json
+# Add --timings to your next intended command to measure its actual path
+```
+
+Reports are opt-in and written to stderr after command completion, including
+failures. JSON mode emits one `{"timings": {...}}` object on success; on failure,
+`timings` is added to the existing error envelope. Stdout and exit codes are
+unchanged. `--quiet` does not suppress explicitly requested timings. Help,
+version, and argument-parse exits do not produce a timing report.
+
+`total_ms` starts at entry to async main (before argument parsing), not OS process
+creation or Tokio runtime initialization. Each stage has a static `stage` label,
+`start_ms` offset, and `duration_ms`, measured with a monotonic clock. Stages are
+nested and can repeat for retries; **do not add their durations together**.
+Only reached stages appear. No request contents, credentials, URLs, or profile
+paths are recorded by the timing collector; ordinary error messages are unchanged.
+
+Browser stages distinguish launch-to-CDP-ready, reuse (`browser.reused`, an event
+marker), CDP connection, page setup, navigation dispatch, SDK readiness, the
+existing settle delay, and the challenge. Navigation dispatch only measures the
+CDP acknowledgement; subsequent page/SDK loading is included in `browser.sdk_ready`.
+Auth refresh/exchange and validation have separate stages. Browser stages are
+absent when the command does not need a browser. Separate CLI invocations still
+start fresh solver browsers; this flag does not introduce cross-process reuse.
+`captcha.attempt` additionally includes `attempt` metadata: `number`, `mode`
+(`headless` or `headed`), numeric `provider`, and `outcome` (`success`, the static
+CLI error code, or `cancelled`). It never includes raw errors or challenge tokens.
+Repeated attempts keep the existing fallback order. Download prepare, transfer,
+and MP3 tagging, plus generation polling, have separate timing stages.
+
+Measuring live generation still costs the normal credits—timings is not a dry run.
+
 ### Voice Personas
 
 Generate songs using your own voice. Create a voice in Suno's web UI, then use the persona ID:
@@ -384,7 +423,7 @@ suno download <id> --format m4a --source library --output ./songs/
 suno download <id> --format mp4 --source auto --output ./videos/
 ```
 
-`--source auto` checks the account's `accessible_features` for `studio`. It uses Studio when available; otherwise it calls library authorization once, then prepares the signed URL. Suno's public bundle directly confirms Library MP3/M4A and the Studio preparation route; Library WAV uses Suno's conversion-and-polling flow. `--video` remains as a compatibility shortcut for MP4. MP3 downloads embed lyrics via ID3 tags:
+For MP4, `--source auto` always uses Library without a billing lookup. For audio, it checks the account's `accessible_features` for `studio`. It uses Studio when available; otherwise it uses Library (authorizing once when not already unlocked), then prepares the signed URL. Suno's public bundle directly confirms Library MP3/M4A and the Studio preparation route; Library WAV uses Suno's conversion-and-polling flow. `--video` remains as a compatibility shortcut for MP4. MP3 downloads embed lyrics via ID3 tags:
 
 - **USLT** (plain lyrics) — shown in most music players
 - **SYLT** (synced word-by-word timestamps) — shown in Apple Music with timing
@@ -395,14 +434,61 @@ suno download <id1> <id2> --output ./songs/
 
 Files use slug format: `title-slug-clipid8.mp3` — no overwrites when Suno generates 2 variations.
 
-To use the clip's playback URL instead of signed download preparation:
+The legacy `--source playback` route and experimental local crypto module have
+been removed. Metadata (`audio_url`, `video_url`, `media_urls`, including
+`encoding`) remains available for inspection, but is not a download source.
+`auto` never selects encoded progressive media or silently falls back to the
+remote worker pool. Billing, authorization, and preparation failures are
+reported; select `--source remote-pool` explicitly to use that transport.
 
-```bash
-suno download <id> --source playback --output ./songs/
-suno download <id> --source playback --format mp4 --output ./videos/
+### Remote worker-pool downloads (explicit opt-in)
+
+`--source remote-pool` routes downloads through the local GSuno worker service,
+including the shared `generate`, `describe`, `cover`, `remaster`, and `status`
+`--wait --download DIR` flow. It never silently falls back to Suno's signed URLs. Generation downloads remain MP3; standalone downloads support
+MP3 and WAV. Unsupported formats are rejected before any provider access.
+
+```sh
+# Create → wait → download; requires the updated service and an authorized, connected browser worker.
+suno generate --title 'Example' --tags 'piano' --lyrics-file song.txt \
+  --wait --download ./songs --source remote-pool
+# Resume existing clips; do not submit generation again after a download failure.
+suno status CLIP_UUID --wait --download ./songs --source remote-pool
+suno download CLIP_UUID --format wav --source remote-pool --output ./songs
 ```
 
-Playback uses `audio_url` for MP3 and `video_url` for MP4, without billing lookup, library authorization, or signed preparation. Clips must be complete and the metadata URL must use HTTPS. WAV/M4A are not supported in this mode; no conversion is performed. Playback URLs may expire or return a different media format. Transfers still validate the container and use an atomic `.part` file; MP3 lyric tagging remains enabled. A playback failure never falls back to signed preparation. Use this only for media you have permission to access.
+Defaults: `SUNO_REMOTE_POOL_URL=http://127.0.0.1:8787` and token file
+`~/.suno/remote-downloader/worker-token`. Override the file location with
+`SUNO_REMOTE_POOL_TOKEN_FILE`; this variable is a **path**, not the token itself.
+Only numeric HTTP loopback origins are accepted; redirects/proxies are disabled.
+An authenticated health check runs before paid generation with remote downloads.
+Files are size/container/SHA-256 checked and atomically published without replacing
+an existing destination, then follow the ordinary local-path/lyrics-tagging flow.
+`--timings` includes `download.remote_pool`. Workers must already have authorized
+provider access; this option does not automate account setup or bypass verification.
+
+See [local worker service setup and admin protocol](docs/remote-downloader-local.md).
+An already-running older service needs a **safe restart after active work is
+reconciled** to load the new admin endpoints. Do not stop active/ambiguous work.
+
+#### LRC export is a separate API route
+
+Remote-pool transports audio only. Neither it nor the normal download flow
+automatically writes `.lrc` sidecars. Existing MP3 ID3 lyric embedding remains
+unchanged and is not an LRC file. To export available word alignment, use the
+Suno API separately with your normal CLI authentication:
+
+```sh
+suno timed-lyrics CLIP_UUID --lrc > song.lrc
+```
+
+`--lrc` emits raw LRC text even when piped or combined with `--json`; it does not
+use the worker pool. Instrumental clips or clips without successful alignment
+can return empty output. Automatic LRC export is not implemented yet.
+
+Before retrying a remote download failure, inspect the service job/status and
+reconcile any outstanding work: a timeout or CLI exit does not cancel the job.
+Use `status` for existing generated clips rather than submitting generation again.
 
 ### Models
 

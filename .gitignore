@@ -3,3 +3,9 @@ target/
 .DS_Store
 .claude/
 graphify-out/
+
+# Local diagnostics and Python bytecode (never release account/job state)
+/jobs.json
+/timings.json
+__pycache__/
+*.py[cod]

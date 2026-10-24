@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.11.0 — Explicit remote-pool downloads and timing diagnostics
+
+### Added
+
+- Global `--source remote-pool` for the create → wait → download flow and existing-clip downloads. The authenticated loopback worker service supports MP3/WAV; creation/status `--download` remains MP3. An admin health check runs before paid generation requesting remote downloads. No automatic provider fallback occurs.
+- Local Python worker service with authenticated admin enqueue/status/file endpoints, device routing and connectivity probes, safe offline administration, durable receipts, and explicit ambiguous-work reconciliation. The development helper requires macOS/Linux (POSIX `fcntl`); it does not bypass provider authorization or verification.
+- Remote transfers check size, SHA-256, and container signatures before atomic no-clobber publication. Existing MP3 tagging and `local_path` output remain available.
+- Opt-in global `--timings` reports monotonic stage durations on stderr, including auth, captcha/browser, generation, downloads and tagging. JSON failures retain a single error envelope; timing records omit credentials and request data.
+- Clip `media_urls` and opaque `encoding` metadata are preserved for inspection only.
+
+### Changed / migration
+
+- Removed `--source playback`; use official signed `auto`/`studio`/`library` downloads, or explicitly select `remote-pool`. The unused experimental local crypto implementation is not supported. No encoded progressive downloads or local decryption are provided.
+- `auto` uses official signed Studio/Library preparation only (MP4 always Library). Billing, authorization and preparation errors propagate without silent fallback.
+- Help and README document remote-pool setup, create/wait/download recovery, and separate `suno timed-lyrics CLIP_UUID --lrc > song.lrc` export via Suno API authentication. Downloads do not automatically create LRC sidecars; MP3 ID3 embedding is unchanged.
+
+### Verification scope
+
+- `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked` passed locally (207 Rust tests).
+- All 10 Python worker-service tests passed; CI and release verification now run them.
+- `cargo build --locked --release` and the shell framework conformance probe passed; the release binary reports `suno 0.11.0`.
+- The separate Python schema validator could not run locally because `jsonschema` is not installed; CI installs `conformance/requirements.txt` before running it. Cross-platform release builds remain CI work.
+
+Local Rust and Python tests use isolated state and loopback mocks; they do not
+establish live provider decoding, browser-worker availability or credit-spending
+generation. Reconcile existing active/ambiguous work before safely restarting an
+older service to enable its new admin endpoints.
+
 ## v0.10.2 — Playback URL downloads
 
 - Added `suno download --source playback` to use clip metadata URLs for MP3/MP4 without signed download preparation. Atomic transfers, container validation, and MP3 lyric tagging remain enabled.

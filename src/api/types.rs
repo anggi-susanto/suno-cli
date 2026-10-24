@@ -93,6 +93,8 @@ pub struct Clip {
     pub status: String,
     pub model_name: String,
     pub audio_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_urls: Vec<MediaUrl>,
     pub video_url: Option<String>,
     pub image_url: Option<String>,
     pub created_at: String,
@@ -108,6 +110,19 @@ pub struct Clip {
     pub local_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MediaUrl {
+    pub url: String,
+    #[serde(default)]
+    pub content_type: String,
+    #[serde(default)]
+    pub delivery: String,
+    /// Opaque encoding metadata reported by Suno (e.g. `1.0.0`). Preserved for
+    /// diagnostics only; never used for download routing or local decryption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

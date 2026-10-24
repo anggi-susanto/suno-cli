@@ -30,7 +30,10 @@ Examples:
     List your library as JSON and extract clip IDs
 
   suno timed-lyrics <clip_id> --lrc > song.lrc
-    Word-level synced lyrics in LRC format (raw even when piped)
+    Separate Suno API request for LRC (raw even when piped); downloads do not create .lrc files
+
+  suno generate --title \"Example\" --tags \"piano\" --lyrics-file song.txt --wait --download ./songs/ --source remote-pool
+    Create → wait → download via the configured local worker pool (explicit opt-in)
 
   suno cover <clip_id> --tags \"jazz, smooth piano\" --wait
     Re-imagine an existing clip in a new style";
@@ -53,6 +56,14 @@ pub struct Cli {
     /// Suppress non-essential output
     #[arg(long, global = true)]
     pub quiet: bool,
+
+    /// Download route for download and creation/status --download (remote-pool: local MP3/WAV worker service)
+    #[arg(long, global = true, value_enum, default_value_t = DownloadSource::Auto)]
+    pub source: DownloadSource,
+
+    /// Report monotonic stage timings on stderr (no credentials or request data)
+    #[arg(long, global = true)]
+    pub timings: bool,
 
     /// Use invisible Chrome only when a captcha is required; never open a window
     #[arg(long, global = true)]
@@ -117,7 +128,10 @@ pub enum Commands {
     Jobs(JobsArgs),
 
     /// Download audio/video for clip(s)
-    #[command(visible_alias = "dl")]
+    #[command(
+        visible_alias = "dl",
+        after_long_help = "Remote pool (explicit opt-in):\n  suno download CLIP_UUID --source remote-pool --format wav --output ./songs/\n  suno status CLIP_UUID --wait --download ./songs/ --source remote-pool\nRequires the updated local worker service and an authorized browser worker.\nRemote pool supports MP3/WAV only; no automatic fallback or .lrc sidecars.\nFetch LRC separately via Suno API: suno timed-lyrics CLIP_UUID --lrc > song.lrc"
+    )]
     Download(DownloadArgs),
 
     /// Delete/trash a clip
@@ -130,7 +144,10 @@ pub enum Commands {
     /// Toggle clip public/private
     Publish(PublishArgs),
 
-    /// Get word-level timestamped lyrics
+    /// Fetch word-level timestamped lyrics via Suno API (separate from downloads)
+    #[command(
+        after_long_help = "Export LRC separately: suno timed-lyrics CLIP_UUID --lrc > song.lrc\nUses Suno API authentication, not the remote worker pool. Downloads do not\nautomatically create LRC files. Instrumentals/unavailable alignment may be empty."
+    )]
     TimedLyrics(TimedLyricsArgs),
 
     /// Show credit balance and plan info
@@ -788,10 +805,6 @@ pub struct DownloadArgs {
     /// File format; MP3 is the default
     #[arg(long, value_enum, default_value_t = DownloadFormat::Mp3, conflicts_with = "video")]
     pub format: DownloadFormat,
-
-    /// auto selects Studio/library; playback uses metadata URLs (MP3/MP4 only)
-    #[arg(long, value_enum, default_value_t = DownloadSource::Auto)]
-    pub source: DownloadSource,
 }
 
 #[derive(clap::Args)]
@@ -836,7 +849,7 @@ pub struct TimedLyricsArgs {
     /// Clip ID
     pub id: String,
 
-    /// Output as LRC format
+    /// Emit raw LRC text, even when piped or --json is set (no automatic sidecar)
     #[arg(long)]
     pub lrc: bool,
 }
@@ -1058,10 +1071,12 @@ impl DownloadFormat {
 #[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DownloadSource {
     #[default]
+    /// Official signed downloads: Studio if entitled, otherwise Library; MP4 uses Library
     Auto,
     Studio,
     Library,
-    Playback,
+    /// Explicit remote worker pool; MP3/WAV only, never falls back
+    RemotePool,
 }
 fn percentage(value: &str) -> Result<f64, String> {
     let n: f64 = value

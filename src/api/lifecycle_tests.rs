@@ -19,32 +19,6 @@ struct Request {
     body: String,
 }
 
-#[test]
-fn playback_download_cli_accepts_audio_and_video() {
-    use clap::Parser;
-    for (flags, expected) in [
-        (vec![], DownloadFormat::Mp3),
-        (vec!["--format", "mp4"], DownloadFormat::Mp4),
-        (vec!["--video"], DownloadFormat::Mp4),
-    ] {
-        let mut argv = vec!["suno", "download", "clip-id", "--source", "playback"];
-        argv.extend(flags);
-        let parsed = crate::cli::Cli::try_parse_from(argv).unwrap();
-        let crate::cli::Commands::Download(args) = parsed.command else {
-            panic!("expected download command");
-        };
-        assert_eq!(args.source, DownloadSource::Playback);
-        assert_eq!(
-            if args.video {
-                DownloadFormat::Mp4
-            } else {
-                args.format
-            },
-            expected
-        );
-    }
-}
-
 struct Reply {
     status: u16,
     body: &'static str,
@@ -215,80 +189,6 @@ async fn polling_retries_503_and_retains_a_completed_sibling_from_partial_feeds(
     assert!(clips.iter().any(|c| c.id == "a" && c.status == "complete"));
     assert!(clips.iter().any(|c| c.id == "b" && c.status == "complete"));
     assert_eq!(requests.lock().unwrap().len(), 3);
-}
-
-#[tokio::test]
-async fn playback_download_uses_metadata_without_preparation_requests() {
-    let client = SunoClient::for_test("http://127.0.0.1:9".into());
-    let mut clip = clip("playback", "complete", Some(false));
-    clip.audio_url = Some("https://cdn.example.invalid/audio.mp3?token=playback".into());
-    clip.video_url = Some("https://cdn.example.invalid/video.mp4".into());
-    for (format, expected) in [
-        (DownloadFormat::Mp3, clip.audio_url.as_ref().unwrap()),
-        (DownloadFormat::Mp4, clip.video_url.as_ref().unwrap()),
-    ] {
-        assert_eq!(
-            client
-                .prepare_download(&clip, format, DownloadSource::Playback)
-                .await
-                .unwrap(),
-            *expected
-        );
-    }
-}
-
-#[tokio::test]
-async fn playback_download_rejects_unsupported_formats_without_network_access() {
-    let client = SunoClient::for_test("http://127.0.0.1:9".into());
-    for format in [DownloadFormat::Wav, DownloadFormat::M4a] {
-        let err = client
-            .download_source(DownloadSource::Playback, format)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, CliError::InvalidInput(_)));
-        assert!(err.to_string().contains("MP3 and MP4"));
-    }
-}
-
-#[tokio::test]
-async fn playback_download_rejects_missing_invalid_and_insecure_urls() {
-    let client = SunoClient::for_test("http://127.0.0.1:9".into());
-    for url in [
-        None,
-        Some(""),
-        Some("not a URL"),
-        Some("http://cdn.example.invalid/audio.mp3"),
-    ] {
-        for format in [DownloadFormat::Mp3, DownloadFormat::Mp4] {
-            let mut clip = clip("playback", "complete", Some(false));
-            clip.audio_url = url.map(str::to_owned);
-            clip.video_url = url.map(str::to_owned);
-            let err = client
-                .prepare_download(&clip, format, DownloadSource::Playback)
-                .await
-                .unwrap_err();
-            assert!(matches!(err, CliError::Download(_)), "{err:?}");
-        }
-    }
-}
-
-#[tokio::test]
-async fn playback_download_never_falls_back_to_signed_preparation() {
-    let client = SunoClient::for_test("http://127.0.0.1:9".into());
-    let err = client
-        .prepared_download_url("playback", DownloadFormat::Mp3, DownloadSource::Playback)
-        .await
-        .unwrap_err();
-    assert!(matches!(err, CliError::InvalidInput(_)));
-    let err = client
-        .prepare_download(
-            &clip("playback", "streaming", Some(false)),
-            DownloadFormat::Mp3,
-            DownloadSource::Playback,
-        )
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("wait for completion"));
 }
 
 #[tokio::test]
@@ -537,4 +437,113 @@ async fn saved_request_never_silently_loses_ids_to_a_partial_feed() {
         assert!(error.to_string().contains("a b"));
     }
     server.join().unwrap();
+}
+
+#[test]
+fn removed_playback_source_is_rejected_by_cli() {
+    use clap::Parser;
+    let error =
+        crate::cli::Cli::try_parse_from(["suno", "download", "clip-id", "--source", "playback"])
+            .err()
+            .expect("removed source must fail");
+    assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+}
+
+#[tokio::test]
+async fn auto_audio_uses_signed_entitlement_route_not_encoded_metadata() {
+    for (features, expected) in [
+        (
+            r#"[{"name":"studio"}]"#,
+            "/api/studio/clip/encoded/download?format=m4a",
+        ),
+        ("[]", "/api/download/clip/encoded?format=m4a"),
+    ] {
+        let billing = Box::leak(format!(
+            r#"{{"total_credits_left":100,"plan":{{"name":"test"}},"accessible_features":{features}}}"#
+        ).into_boxed_str());
+        let (base, requests, server) = mock_server(vec![
+            Reply {
+                status: 200,
+                body: billing,
+            },
+            Reply {
+                status: 200,
+                body: r#"{"ok":true,"status":"ready","download_url":"https://cdn.example.invalid/signed.m4a"}"#,
+            },
+        ]);
+        let client = SunoClient::for_test(base);
+        let mut clip = clip("encoded", "complete", Some(true));
+        clip.audio_url = Some("https://cdn.example.invalid/legacy.mp3".into());
+        clip.media_urls = vec![super::types::MediaUrl {
+            url: "https://cdn.example.invalid/encoded.m4a".into(),
+            content_type: "m4a-opus".into(),
+            delivery: "progressive".into(),
+            encoding: Some("9.9.9".into()),
+        }];
+        let url = client
+            .prepare_download(&clip, DownloadFormat::M4a, DownloadSource::Auto)
+            .await
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(url, "https://cdn.example.invalid/signed.m4a");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].target, "/api/billing/info/");
+        assert_eq!(requests[1].target, expected);
+        let json = serde_json::to_value(&clip).unwrap();
+        assert_eq!(json["media_urls"][0]["encoding"], "9.9.9");
+    }
+}
+
+#[tokio::test]
+async fn auto_video_uses_library_without_billing_lookup() {
+    let (base, requests, server) = mock_server(vec![Reply {
+        status: 200,
+        body: r#"{"ok":true,"status":"ready","download_url":"https://cdn.example.invalid/signed.mp4"}"#,
+    }]);
+    let client = SunoClient::for_test(base);
+    client
+        .prepare_download(
+            &clip("video", "complete", Some(true)),
+            DownloadFormat::Mp4,
+            DownloadSource::Auto,
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target, "/api/download/clip/video?format=mp4");
+}
+
+#[tokio::test]
+async fn auto_billing_failure_does_not_fall_back_to_metadata_or_remote_pool() {
+    let (base, requests, server) = mock_server(vec![Reply {
+        status: 400,
+        body: "billing unavailable",
+    }]);
+    let client = SunoClient::for_test(base);
+    let mut clip = clip("failure", "complete", Some(true));
+    clip.audio_url = Some("https://cdn.example.invalid/legacy.mp3".into());
+    assert!(
+        client
+            .prepare_download(&clip, DownloadFormat::Mp3, DownloadSource::Auto)
+            .await
+            .is_err()
+    );
+    server.join().unwrap();
+    assert_eq!(requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn signed_preparation_rejects_unresolved_or_remote_sources_without_network() {
+    let client = SunoClient::for_test("http://127.0.0.1:9".into());
+    for source in [DownloadSource::Auto, DownloadSource::RemotePool] {
+        assert!(matches!(
+            client
+                .prepared_download_url("id", DownloadFormat::Mp3, source)
+                .await,
+            Err(CliError::InvalidInput(_))
+        ));
+    }
 }

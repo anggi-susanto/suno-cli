@@ -94,7 +94,10 @@ pub async fn solve(
     provider: u8,
     quiet: bool,
 ) -> Result<(String, u8), CliError> {
+    let _timing = crate::timings::span("captcha.total");
+    let wait = crate::timings::span("captcha.lock_wait");
     let _serialized = solve_lock().lock().await;
+    drop(wait);
     SOLVER_QUIET.store(quiet, Ordering::Relaxed);
     let pin_headless = headless_only || env_flag("SUNO_CAPTCHA_HEADLESS");
     let pin_headed = !pin_headless && env_flag("SUNO_CAPTCHA_HEADED");
@@ -107,8 +110,10 @@ pub async fn solve(
     // Turnstile failure. Return the provider that actually produced the token.
     let providers: &[u8] = if provider == 2 { &[2, 1] } else { &[1] };
     let mut last = None;
+    let mut attempt = 0;
     for &p in providers {
-        match solve_in(first, auth, p).await {
+        attempt += 1;
+        match measured_solve(first, auth, p, attempt).await {
             Ok(token) => return Ok((token, p)),
             Err(e) => {
                 solver_log!("Captcha provider {p} failed: {e}");
@@ -119,7 +124,7 @@ pub async fn solve(
     }
     if first == ChromeMode::Headless && !pin_headless {
         solver_log!("Retrying captcha with the offscreen browser fallback...");
-        match solve_in(ChromeMode::Headed, auth, 1).await {
+        match measured_solve(ChromeMode::Headed, auth, 1, attempt + 1).await {
             Ok(token) => return Ok((token, 1)),
             Err(e) => last = Some(e),
         }
@@ -130,6 +135,29 @@ pub async fn solve(
 
 fn env_flag(name: &str) -> bool {
     std::env::var(name).is_ok_and(|v| v == "1")
+}
+
+async fn measured_solve(
+    mode: ChromeMode,
+    auth: &AuthState,
+    provider: u8,
+    number: u8,
+) -> Result<String, CliError> {
+    let mut timing = crate::timings::span("captcha.attempt").attempt(
+        number,
+        if mode == ChromeMode::Headless {
+            "headless"
+        } else {
+            "headed"
+        },
+        provider,
+    );
+    let result = solve_in(mode, auth, provider).await;
+    timing.outcome(match &result {
+        Ok(_) => "success",
+        Err(error) => error.error_code(),
+    });
+    result
 }
 
 async fn solve_in(mode: ChromeMode, auth: &AuthState, provider: u8) -> Result<String, CliError> {
@@ -202,10 +230,12 @@ pub async fn detect_solver_chrome() -> Option<u16> {
 /// leftover, an unrelated service) just pushes us to an OS-assigned port, so
 /// our Suno cookies can't reach a stranger.
 async fn ensure_chrome_running(mode: ChromeMode) -> Result<(), CliError> {
+    let _timing = crate::timings::span("browser.ensure_running");
     {
         let mut slot = chrome_slot().lock().await;
         if let Some((_, running_mode, _)) = slot.as_ref() {
             if *running_mode == mode && cdp_version().await.is_ok() {
+                let _reuse = crate::timings::span("browser.reused");
                 return Ok(());
             }
             // Wrong mode or dead — replace it.
@@ -226,6 +256,7 @@ async fn ensure_chrome_running(mode: ChromeMode) -> Result<(), CliError> {
     };
     ACTIVE_PORT.store(port, Ordering::Relaxed);
 
+    let _launch = crate::timings::span("browser.launch_to_cdp_ready");
     let chrome_path = locate_chrome()?;
     // Never share a live profile across separate CLI processes. Chrome's
     // singleton lock otherwise makes concurrent create/cover commands launch
@@ -408,6 +439,7 @@ async fn cdp_list() -> Result<Vec<Target>, CliError> {
 /// Navigation to suno.com/create happens only after we have cleared stale
 /// cookies and installed the small cookie subset the captcha page needs.
 async fn find_or_create_suno_tab() -> Result<Target, CliError> {
+    let _timing = crate::timings::span("browser.find_tab");
     let targets = cdp_list().await?;
     if let Some(t) = targets.into_iter().find(|t| {
         t.target_type == "page"
@@ -514,10 +546,13 @@ async fn render_and_execute(
     auth: &AuthState,
     provider: u8,
 ) -> Result<String, CliError> {
+    let connect = crate::timings::span("browser.cdp_connect");
     let (mut ws, _) = tokio_tungstenite::connect_async(ws_url)
         .await
         .map_err(|e| CliError::Config(format!("CDP ws connect: {e}")))?;
 
+    drop(connect);
+    let setup = crate::timings::span("browser.page_setup");
     let mut next_id: u64 = 0;
     let mut next = || -> u64 {
         next_id += 1;
@@ -558,6 +593,8 @@ async fn render_and_execute(
         .await?;
     }
 
+    drop(setup);
+    let navigate = crate::timings::span("browser.navigate_dispatch");
     cdp_call(
         &mut ws,
         next(),
@@ -566,6 +603,8 @@ async fn render_and_execute(
     )
     .await?;
 
+    drop(navigate);
+    let readiness = crate::timings::span("browser.sdk_ready");
     if provider == 2 {
         cdp_call(&mut ws, next(), "Runtime.evaluate", serde_json::json!({
             "expression": "if (!window.turnstile && !document.querySelector('script[src*=\"challenges.cloudflare.com/turnstile\"]')) { const s = document.createElement('script'); s.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'; document.head.appendChild(s); }",
@@ -607,9 +646,13 @@ async fn render_and_execute(
             "captcha provider {provider} never finished loading on suno.com/create ({page_state})"
         )));
     }
+    drop(readiness);
+    let settle = crate::timings::span("browser.sdk_settle");
     // Extra settle so the SDK is fully wired up.
     sleep(Duration::from_secs(2)).await;
 
+    drop(settle);
+    let _challenge = crate::timings::span("captcha.challenge");
     // Render an invisible widget and execute it
     let solve_js = if provider == 2 {
         r#"(async () => {

@@ -40,14 +40,24 @@ pub fn error_details(
     suggestion: &str,
     details: Option<serde_json::Value>,
 ) {
+    error_details_with_timings(code, message, suggestion, details, None);
+}
+pub fn error_details_with_timings(
+    code: &str,
+    message: &str,
+    suggestion: &str,
+    details: Option<serde_json::Value>,
+    timings: Option<&serde_json::Value>,
+) {
     let mut error = serde_json::json!({"code":code,"message":message,"suggestion":suggestion});
     if let Some(details) = details {
         error["details"] = details;
     }
-    let _ = write_json(
-        std::io::stderr().lock(),
-        &serde_json::json!({"version":"1","status":"error","error":error}),
-    );
+    let mut envelope = serde_json::json!({"version":"1","status":"error","error":error});
+    if let Some(timings) = timings {
+        envelope["timings"] = timings.clone();
+    }
+    let _ = write_json(std::io::stderr().lock(), &envelope);
 }
 #[cfg(test)]
 mod tests {

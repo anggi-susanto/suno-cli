@@ -17,13 +17,19 @@ pub async fn download_clip(
     source: crate::cli::DownloadSource,
     quiet: bool,
 ) -> Result<String, CliError> {
+    let _total = crate::timings::span("download.total");
+    let prepare = crate::timings::span("download.prepare");
     let source = client.download_source(source, format).await?;
+    if source == crate::cli::DownloadSource::RemotePool {
+        drop(prepare);
+        return crate::remote_pool::RemotePool::from_env()?
+            .download(clip, output_dir, format)
+            .await;
+    }
     let url = client.prepare_download(clip, format, source).await?;
+    drop(prepare);
     match transfer(clip, output_dir, format.extension(), &url, quiet).await {
-        Err(CliError::Http(e))
-            if source != crate::cli::DownloadSource::Playback
-                && matches!(e.status().map(|s| s.as_u16()), Some(401 | 403)) =>
-        {
+        Err(CliError::Http(e)) if matches!(e.status().map(|s| s.as_u16()), Some(401 | 403)) => {
             let fresh = client
                 .prepared_download_url(&clip.id, format, source)
                 .await?;
@@ -40,6 +46,7 @@ async fn transfer(
     url: &str,
     quiet: bool,
 ) -> Result<String, CliError> {
+    let _transfer = crate::timings::span("download.transfer");
     let filename = clip_filename(&clip.title, &clip.id, ext);
     // Create the target dir up front: generation has already spent credits by
     // the time we download, so a missing `--download` dir must not error out.
@@ -113,7 +120,7 @@ async fn transfer(
     Ok(std::fs::canonicalize(&path)?.display().to_string())
 }
 
-async fn validate_audio_file(path: &Path, ext: &str) -> Result<(), CliError> {
+pub(crate) async fn validate_audio_file(path: &Path, ext: &str) -> Result<(), CliError> {
     use tokio::io::AsyncReadExt;
     let mut file = tokio::fs::File::open(path).await?;
     let mut header = [0u8; 12];
@@ -163,7 +170,7 @@ async fn stream_to_file(
 /// Build `<title-slug>-<id8>.<ext>`. Runs of non-alphanumeric chars collapse
 /// to a single `-` (a naive `replace("--", "-")` leaves `--` behind for 3+
 /// char runs), and empty/symbol-only titles must not yield a leading dash.
-fn clip_filename(title: &str, id: &str, ext: &str) -> String {
+pub(crate) fn clip_filename(title: &str, id: &str, ext: &str) -> String {
     let mut slug = String::new();
     for c in title.to_lowercase().chars() {
         if c.is_alphanumeric() {
@@ -202,6 +209,7 @@ pub fn embed_lyrics_in_mp3(
     plain_lyrics: Option<&str>,
     aligned_words: Option<&[AlignedWord]>,
 ) -> Result<(), CliError> {
+    let _tagging = crate::timings::span("download.tagging");
     let mut tag = id3::Tag::read_from_path(mp3_path).unwrap_or_else(|_| id3::Tag::new());
 
     // Set title

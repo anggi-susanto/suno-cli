@@ -1,4 +1,4 @@
-//! Current Suno file preparation, separate from playback and byte transfer.
+//! Current Suno file preparation, separate from byte transfer.
 use super::{SunoClient, types::Clip};
 use crate::{
     cli::{DownloadFormat, DownloadSource},
@@ -18,18 +18,17 @@ struct PreparedDownload {
 }
 
 impl SunoClient {
+    /// Resolve Auto to official signed preparation only. MP4 uses Library;
+    /// audio uses Studio when entitled, otherwise Library. Errors propagate:
+    /// metadata URLs and remote-pool are never automatic fallbacks.
     pub async fn download_source(
         &self,
         source: DownloadSource,
         format: DownloadFormat,
     ) -> Result<DownloadSource, CliError> {
-        if source == DownloadSource::Playback
-            && !matches!(format, DownloadFormat::Mp3 | DownloadFormat::Mp4)
-        {
-            return Err(CliError::InvalidInput(
-                "playback supports MP3 and MP4 only; use auto, studio, or library for WAV/M4A"
-                    .into(),
-            ));
+        if source == DownloadSource::RemotePool {
+            crate::remote_pool::validate_format(format)?;
+            return Ok(source);
         }
         if source != DownloadSource::Auto {
             return Ok(source);
@@ -57,6 +56,11 @@ impl SunoClient {
         format: DownloadFormat,
         source: DownloadSource,
     ) -> Result<String, CliError> {
+        if source == DownloadSource::RemotePool {
+            return Err(CliError::InvalidInput(
+                "remote-pool must use the shared download transport".into(),
+            ));
+        }
         if clip.status != "complete" {
             return Err(CliError::Download(format!(
                 "clip {} is {}; wait for completion with `suno status {} --wait`",
@@ -64,26 +68,6 @@ impl SunoClient {
             )));
         }
         let source = self.download_source(source, format).await?;
-        if source == DownloadSource::Playback {
-            let url = match format {
-                DownloadFormat::Mp4 => clip.video_url.as_deref(),
-                _ => clip.audio_url.as_deref(),
-            }
-            .filter(|url| !url.is_empty())
-            .ok_or_else(|| {
-                CliError::Download(format!(
-                    "clip {} has no {} playback URL",
-                    clip.id,
-                    format.extension()
-                ))
-            })?;
-            let parsed = reqwest::Url::parse(url)
-                .map_err(|_| CliError::Download("invalid playback URL".into()))?;
-            if parsed.scheme() != "https" || parsed.host_str().is_none() {
-                return Err(CliError::Download("playback URL must use HTTPS".into()));
-            }
-            return Ok(url.to_owned());
-        }
         if source == DownloadSource::Library && clip.is_download_unlocked != Some(true) {
             // Authorize once per invocation, outside all preparation/transfer
             // retries. A later invocation re-fetches the unlock flag first.
@@ -154,9 +138,9 @@ impl SunoClient {
         format: DownloadFormat,
         source: DownloadSource,
     ) -> Result<String, CliError> {
-        if source == DownloadSource::Playback {
+        if !matches!(source, DownloadSource::Studio | DownloadSource::Library) {
             return Err(CliError::InvalidInput(
-                "playback URLs come from clip metadata, not signed preparation".into(),
+                "signed preparation requires a resolved studio or library source".into(),
             ));
         }
         if source == DownloadSource::Library && format == DownloadFormat::Wav {

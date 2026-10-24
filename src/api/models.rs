@@ -48,6 +48,7 @@ pub fn validate_offline(req: &GenerateRequest) -> Result<(), CliError> {
 
 impl SunoClient {
     pub async fn validate_generation(&self, req: &GenerateRequest) -> Result<(), CliError> {
+        let _timing = crate::timings::span("generation.validate");
         let billing = self.billing_info().await?;
         if req.metadata.create_mode == "remaster" {
             // can_use is false on the current remaster catalogue even for

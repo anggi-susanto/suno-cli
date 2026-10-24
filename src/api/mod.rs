@@ -47,6 +47,7 @@ impl SunoClient {
     /// Create a new client. If JWT is expired but we have a Clerk cookie,
     /// auto-refresh the JWT transparently.
     pub async fn new_with_refresh(mut auth: AuthState) -> Result<Self, CliError> {
+        let _timing = crate::timings::span("client.initialize");
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
@@ -57,6 +58,7 @@ impl SunoClient {
             // Try auto-refresh via Clerk cookie
             if let (Some(cookie), Some(session_id)) = (&auth.clerk_client_cookie, &auth.session_id)
             {
+                let _timing = crate::timings::span("auth.refresh");
                 match auth::clerk_refresh_jwt(&client, cookie, session_id).await {
                     Ok(jwt) => {
                         auth.jwt = Some(jwt);
@@ -67,6 +69,7 @@ impl SunoClient {
                     }
                 }
             } else if let Some(cookie) = &auth.clerk_client_cookie {
+                let _timing = crate::timings::span("auth.exchange");
                 match auth::clerk_token_exchange(&client, cookie).await {
                     Ok((session_id, jwt)) => {
                         auth.session_id = Some(session_id);
@@ -138,6 +141,7 @@ impl SunoClient {
     /// in-process retry path in `with_auth_retry` when Suno's server-side
     /// staleness check fires mid-request despite a still-valid `exp` claim.
     pub(crate) async fn refresh_jwt(&self) -> Result<(), CliError> {
+        let _timing = crate::timings::span("auth.refresh_retry");
         // Snapshot the cookie + session_id under the lock, then drop it
         // before the network call.
         let (cookie, session_id) = {

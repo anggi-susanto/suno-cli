@@ -350,10 +350,10 @@ fn domain_annotations() -> serde_json::Map<String, Value> {
                 "options": [
                     {"name": "--output", "type": "string", "required": false, "default": ". (config `output_dir`)", "description": "Output directory"},
                     {"name": "--format", "type": "string", "required": false, "default": "mp3", "values": ["mp3", "wav", "m4a", "mp4"], "description": "Prepared file format"},
-                    {"name": "--source", "type": "string", "required": false, "default": "auto", "values": ["auto", "studio", "library", "playback"], "description": "auto selects Studio/library; playback uses metadata URLs without signed preparation (MP3/MP4 only)"},
+                    {"name": "--source", "type": "string", "required": false, "default": "auto", "values": ["auto", "studio", "library", "remote-pool"], "description": "auto uses official signed Studio/library downloads only (MP4 always Library); remote-pool is explicit opt-in"},
                     {"name": "--video", "type": "bool", "required": false, "default": false, "description": "Compatibility shortcut for --format mp4; conflicts with an explicit --format"}
                 ],
-                "transport": "By default, formats use Suno's signed download-preparation APIs. Prepared URLs are short-lived HTTPS URLs; auto selects Studio when the account has access and otherwise uses the library route. Explicit playback uses clip audio_url (MP3) or video_url (MP4), without signed preparation or fallback; URLs must use HTTPS and clips must be complete. WAV/M4A are unsupported in playback mode."
+                "transport": "Explicit global --source remote-pool uses the authenticated local worker service (MP3/WAV only) without provider preparation or fallback. By default, formats use Suno's signed download-preparation APIs. Prepared URLs are short-lived HTTPS URLs; auto selects Studio when the account has access and otherwise uses the library route. MP4 always uses Library in auto mode. Billing and preparation errors propagate without fallback to metadata URLs or remote-pool. media_urls[].encoding remains metadata only; encoded progressive downloads and local decryption are not supported."
             }),
         ),
         (
@@ -395,11 +395,11 @@ fn domain_annotations() -> serde_json::Map<String, Value> {
         (
             "timed-lyrics",
             json!({
-                "description": "Word-level timestamped lyrics",
+                "description": "Word-level timestamped lyrics via a separate authenticated Suno API request, not the remote worker pool; downloads do not create LRC sidecars",
                 "args": [{"name": "id", "kind": "positional", "type": "string", "required": true, "description": "Clip ID"}],
                 "options": [
                     {"name": "--lrc", "type": "bool", "required": false, "default": false,
-                     "description": "Raw LRC on stdout — stays raw even when piped (documented envelope exception)"}
+                     "description": "Raw LRC on stdout — stays raw even when piped or --json is set (documented envelope exception); unavailable alignment may be empty"}
                 ]
             }),
         ),
@@ -898,7 +898,7 @@ fn base_manifest(commands: Map<String, Value>, global_flags: Map<String, Value>)
                 "receipts": "Contain transaction state, IDs, and next_action; credentials and lyric payloads are omitted.",
                 "idempotency": "Pass --request-id UUID to generate or describe for local receipt reconciliation. A matching completed receipt reuses saved IDs; mismatched or uncertain reuse is rejected. This does not claim provider-side exactly-once execution."
             },
-            "downloads": "Every format uses signed download-preparation APIs. Source auto selects Studio when the account has access, otherwise the library route. Downloads returned by creation/status commands set local_path on each completed clip."
+            "downloads": "Default downloads use signed download-preparation APIs; explicit --source remote-pool uses the authenticated loopback worker pool (MP3/WAV only, never falls back). Source auto selects Studio for audio when the account has access, otherwise Library; MP4 always uses Library. No automatic metadata or remote-pool fallback. Downloads returned by creation/status commands set local_path on each completed clip."
         },
         "auth_path": auth_path,
         "auth": {

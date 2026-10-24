@@ -83,6 +83,7 @@ impl AppConfig {
     /// so no `.split("_")` — splitting would shred multi-word field names
     /// into nonexistent nested tables.
     pub fn load() -> Result<Self, CliError> {
+        let _timing = crate::timings::span("config.load");
         Figment::from(Serialized::defaults(AppConfig::default()))
             .merge(Toml::file(config_path()))
             .merge(Env::prefixed("SUNO_"))

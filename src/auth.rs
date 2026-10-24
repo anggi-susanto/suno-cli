@@ -43,6 +43,7 @@ pub struct BrowserAuth {
 
 impl AuthState {
     pub fn load() -> Result<Self, CliError> {
+        let _timing = crate::timings::span("auth.load");
         let path = Self::path();
         if !path.exists() {
             return Err(CliError::AuthMissing);
