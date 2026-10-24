@@ -443,7 +443,7 @@ reported; select `--source remote-pool` explicitly to use that transport.
 
 ### Remote worker-pool downloads (explicit opt-in)
 
-`--source remote-pool` routes downloads through the local GSuno worker service,
+`--source remote-pool` routes downloads through a compatible HTTPS GSuno pool or the local worker service,
 including the shared `generate`, `describe`, `cover`, `remaster`, and `status`
 `--wait --download DIR` flow. It never silently falls back to Suno's signed URLs. Generation downloads remain MP3; standalone downloads support
 MP3 and WAV. Unsupported formats are rejected before any provider access.
@@ -460,14 +460,39 @@ suno download CLIP_UUID --format wav --source remote-pool --output ./songs
 Defaults: `SUNO_REMOTE_POOL_URL=http://127.0.0.1:8787` and token file
 `~/.suno/remote-downloader/worker-token`. Override the file location with
 `SUNO_REMOTE_POOL_TOKEN_FILE`; this variable is a **path**, not the token itself.
-Only numeric HTTP loopback origins are accepted; redirects/proxies are disabled.
+For a remote VPS pool, export the configuration before launching the CLI:
+
+```sh
+export SUNO_REMOTE_POOL_URL=https://gsunopool.gunamaya.id
+export SUNO_REMOTE_POOL_TOKEN_FILE="$HOME/.suno/gsunopool-token"
+# Provision this file securely with the pool operator's bearer token; do not commit it.
+suno download CLIP_UUID --source remote-pool --format wav --output ./songs
+```
+
+HTTPS origins (including explicitly configured HTTPS localhost/loopback) use normal
+TLS certificate validation. Plain HTTP is accepted only for `127.0.0.1` and `[::1]`
+local development. No URL credentials, non-root path, query or fragment are allowed;
+private/link-local, unspecified, multicast and shared-address IPv4 literals are
+rejected (loopback is the development exception). DNS names are allowed and not
+resolved for private-address filtering: trust the configured service and its DNS.
+Redirects and environment proxies are disabled, including for HTTPS.
+
+For **yt-to-flowmusic**, export both variables in the environment of the parent
+process so its child `suno` inherits them, and configure its download invocation to
+pass `--source remote-pool` (also for creation/status `--download` and recovery).
+The variables do not change the default `auto` source. `suno` does **not** autoload
+`.env`; explicitly export variables or use the parent's own environment loader.
+
+Migration from v0.11: local defaults remain unchanged; a remote pool no longer
+needs a loopback tunnel. Select its HTTPS origin and a local token-file path. The
+bundled Python helper remains loopback-only and is not a production VPS server.
 An authenticated health check runs before paid generation with remote downloads.
 Files are size/container/SHA-256 checked and atomically published without replacing
 an existing destination, then follow the ordinary local-path/lyrics-tagging flow.
 `--timings` includes `download.remote_pool`. Workers must already have authorized
 provider access; this option does not automate account setup or bypass verification.
 
-See [local worker service setup and admin protocol](docs/remote-downloader-local.md).
+See [local helper setup, HTTPS configuration and admin protocol](docs/remote-downloader-local.md).
 An already-running older service needs a **safe restart after active work is
 reconciled** to load the new admin endpoints. Do not stop active/ambiguous work.
 

@@ -291,6 +291,9 @@ fn help_documents_remote_pool_and_separate_lrc_export() {
             vec!["download", "--help"],
             vec![
                 "MP3/WAV only",
+                "SUNO_REMOTE_POOL_URL=https://gsunopool.gunamaya.id",
+                "SUNO_REMOTE_POOL_TOKEN_FILE",
+                "no .env autoload",
                 "no automatic fallback",
                 "timed-lyrics CLIP_UUID --lrc",
             ],

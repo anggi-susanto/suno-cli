@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.12.0 — Direct HTTPS remote-pool downloads
+
+### Added
+
+- Direct HTTPS origins for explicit `--source remote-pool`, including `https://gsunopool.gunamaya.id`; normal certificate validation remains enabled. Compatible gsuno-pool uses the existing authenticated admin health/enqueue/status/file API. MP3/WAV only; no automatic provider fallback.
+- Strict origin validation rejects credentials, query, fragment, non-root or normalized-away paths, insecure remote HTTP and unsafe private/non-unicast IP literals (loopback is allowed for development). Redirects and environment proxies stay disabled. Token-file auth, bounded requests, size/container/SHA-256 checks and atomic no-clobber publication remain unchanged.
+- URL acceptance/rejection matrix and redirect/token-safety regression tests alongside existing authenticated download mocks.
+
+### Migration / configuration
+
+- Local defaults are unchanged: `http://127.0.0.1:8787` and `~/.suno/remote-downloader/worker-token`. The bundled Python helper remains loopback-only development infrastructure.
+- For a VPS, export `SUNO_REMOTE_POOL_URL=https://gsunopool.gunamaya.id` and `SUNO_REMOTE_POOL_TOKEN_FILE=/secure/local/token-file`, then pass `--source remote-pool`. No loopback tunnel required; HTTPS localhost also requires a valid trusted certificate. DNS names are trusted configuration, not resolved for private-address filtering.
+- yt-to-flowmusic must inherit both exported variables and explicitly pass `--source remote-pool` to child `suno` calls, including recovery. Variables alone do not change `auto`; `suno` does not autoload `.env`.
+- An unauthenticated `/healthz` readiness check is not evidence of valid admin auth or an authorized online browser worker. No provider songs or credits are used by release verification.
+
+### Verification scope
+
+- `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked` passed locally (209 Rust tests).
+- All 10 Python helper tests passed. `cargo build --locked --release` reports `suno 0.12.0`; shell conformance passed and the Python schema validator checked 79 responses (isolated temporary environment).
+- Read-only HTTPS `/healthz` on the configured VPS returned `{"ready": true}` with certificate validation. No authenticated enqueue, provider downloads, song generation or credit use was performed. This is not a live browser-worker verification; cross-platform artifacts remain CI work.
+
 ## v0.11.0 — Explicit remote-pool downloads and timing diagnostics
 
 ### Added

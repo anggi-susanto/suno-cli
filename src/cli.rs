@@ -57,7 +57,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub quiet: bool,
 
-    /// Download route for download and creation/status --download (remote-pool: local MP3/WAV worker service)
+    /// Download route for download and creation/status --download (remote-pool: HTTPS/local MP3/WAV worker service)
     #[arg(long, global = true, value_enum, default_value_t = DownloadSource::Auto)]
     pub source: DownloadSource,
 
@@ -130,7 +130,7 @@ pub enum Commands {
     /// Download audio/video for clip(s)
     #[command(
         visible_alias = "dl",
-        after_long_help = "Remote pool (explicit opt-in):\n  suno download CLIP_UUID --source remote-pool --format wav --output ./songs/\n  suno status CLIP_UUID --wait --download ./songs/ --source remote-pool\nRequires the updated local worker service and an authorized browser worker.\nRemote pool supports MP3/WAV only; no automatic fallback or .lrc sidecars.\nFetch LRC separately via Suno API: suno timed-lyrics CLIP_UUID --lrc > song.lrc"
+        after_long_help = "Remote pool (explicit opt-in):\n  suno download CLIP_UUID --source remote-pool --format wav --output ./songs/\n  suno status CLIP_UUID --wait --download ./songs/ --source remote-pool\nRequires a compatible HTTPS pool or updated local service and an authorized browser worker.\nExport SUNO_REMOTE_POOL_URL=https://gsunopool.gunamaya.id and SUNO_REMOTE_POOL_TOKEN_FILE=/path/to/token; no .env autoload.\nHTTP is local numeric loopback only; HTTPS verifies certificates. Redirects/proxies disabled.\nRemote pool supports MP3/WAV only; no automatic fallback or .lrc sidecars.\nFetch LRC separately via Suno API: suno timed-lyrics CLIP_UUID --lrc > song.lrc"
     )]
     Download(DownloadArgs),
 

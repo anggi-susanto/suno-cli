@@ -1,4 +1,4 @@
-//! Explicit, loopback-only remote download transport. Never calls provider URLs.
+//! Explicit HTTPS remote / HTTP loopback download transport. Never calls provider URLs.
 use crate::{api::types::Clip, cli::DownloadFormat, errors::CliError};
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -10,6 +10,20 @@ use std::{
 use tokio::io::AsyncWriteExt;
 
 const LIMIT: u64 = 256 * 1024 * 1024;
+
+// Private and non-unicast literals are not remote service targets. Loopback
+// remains an explicit opt-in for development (TLS validation still applies).
+fn safe_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    ip.is_loopback()
+        || (!ip.is_private()
+            && !ip.is_link_local()
+            && !ip.is_unspecified()
+            && !ip.is_multicast()
+            && !ip.is_broadcast()
+            && ip.octets()[0] != 0
+            && ip.octets()[0] < 240
+            && !(ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1])))
+}
 
 pub(crate) fn validate_format(format: DownloadFormat) -> Result<(), CliError> {
     if !matches!(format, DownloadFormat::Mp3 | DownloadFormat::Wav) {
@@ -43,22 +57,60 @@ impl RemotePool {
                     .map(|h| Path::new(&h).join(".suno/remote-downloader/worker-token"))
             })
             .ok_or_else(|| CliError::Config("remote-pool token file not configured".into()))?;
-        let token = std::fs::read_to_string(token_path).map_err(|_| CliError::Config("cannot read remote-pool token file; start the local service or set SUNO_REMOTE_POOL_TOKEN_FILE".into()))?;
+        let token = std::fs::read_to_string(token_path).map_err(|_| CliError::Config("cannot read remote-pool token file; configure the service token via SUNO_REMOTE_POOL_TOKEN_FILE".into()))?;
         Self::new(base, token)
     }
     fn new(base: String, token: String) -> Result<Self, CliError> {
         let url = reqwest::Url::parse(&base)
             .map_err(|_| CliError::Config("invalid remote-pool URL".into()))?;
-        if url.scheme() != "http"
-            || !matches!(url.host_str(), Some("127.0.0.1" | "[::1]"))
+        // Validate the original spelling too: URL parsing normalizes dot paths,
+        // backslashes, whitespace and unusual numeric IPv4 forms.
+        let authority = base.split_once("://").map(|(_, rest)| rest);
+        let bare_origin = authority.is_some_and(|rest| {
+            !rest.contains(['@', '?', '#', '\\', '%'])
+                && !rest.chars().any(char::is_whitespace)
+                && rest.split_once('/').is_none_or(|(_, path)| path.is_empty())
+        });
+        let host_allowed = url.host_str().is_some_and(|host| {
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            match host.parse::<std::net::IpAddr>() {
+                Ok(std::net::IpAddr::V4(ip)) => safe_ipv4(ip),
+                Ok(std::net::IpAddr::V6(ip)) => {
+                    ip.is_loopback()
+                        || ip.to_ipv4_mapped().map(safe_ipv4).unwrap_or_else(|| {
+                            !ip.is_unspecified()
+                                && !ip.is_multicast()
+                                && !ip.is_unique_local()
+                                && !ip.is_unicast_link_local()
+                        })
+                }
+                // DNS is intentionally not resolved here: this is an explicitly
+                // trusted service, not an SSRF-resistant arbitrary URL fetcher.
+                Err(_) => url.scheme() == "https",
+            }
+        });
+        let scheme_allowed = url.scheme() == "https"
+            || (url.scheme() == "http"
+                && authority.is_some_and(|rest| {
+                    let host_port = rest.trim_end_matches('/');
+                    host_port == "127.0.0.1"
+                        || host_port.starts_with("127.0.0.1:")
+                        || host_port == "[::1]"
+                        || host_port.starts_with("[::1]:")
+                }));
+        if base.chars().any(char::is_whitespace)
+            || !bare_origin
+            || !host_allowed
+            || !scheme_allowed
             || !url.username().is_empty()
             || url.password().is_some()
             || url.query().is_some()
             || url.fragment().is_some()
             || url.path() != "/"
+            || url.port() == Some(0)
         {
             return Err(CliError::Config(
-                "remote-pool URL must be an HTTP loopback origin (127.0.0.1 or [::1])".into(),
+                "remote-pool URL must be an HTTPS origin (public host or loopback), or HTTP 127.0.0.1/[::1] for local development; no credentials, path, query or fragment".into(),
             ));
         }
         let token = token.trim().to_string();
@@ -74,7 +126,7 @@ impl RemotePool {
             .build()
             .map_err(|e| CliError::Http(e.without_url()))?;
         Ok(Self {
-            base: base.trim_end_matches('/').into(),
+            base: url.origin().ascii_serialization(),
             token,
             http,
         })
@@ -101,7 +153,7 @@ impl RemotePool {
         if !response.status().is_success() {
             return Err(CliError::Download(format!(
                 "remote-pool admin API returned {}; check service version/auth (no fallback)",
-                response.status()
+                response.status().as_u16()
             )));
         }
         let mut data = Vec::new();
@@ -243,18 +295,119 @@ mod tests {
     #[test]
     fn origins_and_formats_are_strict() {
         for origin in [
+            "https://gsunopool.gunamaya.id",
+            "https://gsunopool.gunamaya.id/",
+            "https://pool.example:8443",
+            "https://localhost:8787",
             "https://127.0.0.1",
+            "https://[::1]:8787/",
+            "https://8.8.8.8",
+            "https://[2606:4700:4700::1111]",
+            "http://127.0.0.1:8787",
+            "http://[::1]:8787/",
+        ] {
+            assert!(
+                RemotePool::new(origin.into(), "test".into()).is_ok(),
+                "{origin}"
+            );
+        }
+        for origin in [
             "http://example.com",
             "http://localhost",
+            "http://10.0.0.1",
+            "http://127.1",
+            "http://2130706433",
+            "http://0x7f000001",
+            "http://127.0.0.2",
+            "ftp://127.0.0.1",
+            "//example.com",
+            "https://",
+            "https://example.com:0",
+            "https://example.com:65536",
+            "https://10.0.0.1",
+            "https://172.16.0.1",
+            "https://192.168.0.1",
+            "https://169.254.169.254",
+            "https://0.0.0.0",
+            "https://224.0.0.1",
+            "https://255.255.255.255",
+            "https://100.64.0.1",
+            "https://240.0.0.1",
+            "https://[::]",
+            "https://[fc00::1]",
+            "https://[fe80::1]",
+            "https://[ff02::1]",
+            "https://[::ffff:10.0.0.1]",
+            "https://example.com/x",
+            "https://example.com/.",
+            "https://example.com/x/..",
+            "https://example.com/%2e",
+            "https://example.com//",
+            "https://example.com?secret=x",
+            "https://example.com?",
+            "https://example.com#",
+            "https://example.com#secret",
+            "https://user:secret@example.com",
+            "https://@example.com",
+            "https://example.com\\evil",
+            " https://example.com",
+            "https://example.com\n",
             "http://127.0.0.1/x",
             "http://user@127.0.0.1",
-            "http://127.0.0.1?secret=x",
         ] {
-            assert!(RemotePool::new(origin.into(), "test".into()).is_err());
+            let error = RemotePool::new(origin.into(), "test".into())
+                .err()
+                .unwrap_or_else(|| panic!("accepted {origin}"));
+            assert!(!error.to_string().contains("secret"));
         }
-        assert!(RemotePool::new("http://127.0.0.1:8787".into(), "test".into()).is_ok());
+        let pool = RemotePool::new("https://EXAMPLE.com:443/".into(), "test".into()).unwrap();
+        assert_eq!(pool.base, "https://example.com");
         assert!(validate_format(DownloadFormat::Mp4).is_err());
         assert!(validate_format(DownloadFormat::M4a).is_err());
+    }
+
+    #[test]
+    fn token_validation_is_secret_safe() {
+        for token in [
+            "",
+            "  ",
+            "secret\ninside",
+            "secret\rinside",
+            &"s".repeat(4097),
+        ] {
+            let error = RemotePool::new("https://example.com".into(), token.into())
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.to_string(),
+                CliError::Config("invalid remote-pool token file".into()).to_string()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn redirects_are_not_followed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut data = [0; 4096];
+            let n = stream.read(&mut data).unwrap();
+            assert!(String::from_utf8_lossy(&data[..n]).starts_with("GET /admin/health "));
+            // A redirect to a closed port would produce an HTTP error if followed.
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let error = RemotePool::new(base, "test-token".into())
+            .unwrap()
+            .preflight()
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CliError::Config(_)));
+        assert!(!error.to_string().contains("secret"));
+        server.join().unwrap();
     }
 
     #[test]

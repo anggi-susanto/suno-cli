@@ -1,4 +1,4 @@
-# GSuno local worker service
+# GSuno local worker service and HTTPS remote client
 
 Requires Python 3.8+ on macOS/Linux (the state lock uses POSIX `fcntl`; the helper
 is not supported on native Windows). The Rust CLI can connect to a compatible
@@ -168,10 +168,44 @@ outcome. Inspect service `status` first. It does not cancel jobs when a CLI exit
 CLI configuration (no extra flags on each generation command):
 
 - Global `--source remote-pool`, accepted before or after a subcommand.
-- `SUNO_REMOTE_POOL_URL`: default `http://127.0.0.1:8787`; HTTP numeric loopback
-  origin only, no URL credentials/query/path/fragment, no redirects or proxies.
+- `SUNO_REMOTE_POOL_URL`: default `http://127.0.0.1:8787`; HTTPS remote origins
+  are also supported, including explicitly configured HTTPS localhost/loopback.
+  HTTP is restricted to canonical `127.0.0.1` and `[::1]` for local development.
+  No URL credentials (even empty userinfo), query, non-root path or fragment;
+  redirects and environment proxies are disabled. TLS certificates are validated.
+  Private/link-local, unspecified, multicast and shared-address IPv4 literals are
+  rejected except loopback. DNS names are trusted configuration and are not
+  resolved for private-address filtering; only configure a trusted service.
 - `SUNO_REMOTE_POOL_TOKEN_FILE`: default `~/.suno/remote-downloader/worker-token`.
-  `serve --token-file PATH` selects a service token file; use the same file.
+  For the local helper, `serve --token-file PATH` selects the service token file;
+  use the same file. For a remote pool, securely provision a local file containing
+  its bearer token (never put tokens in URLs or commit token files).
+
+### HTTPS pool / migration from v0.11
+
+The Rust CLI can connect directly to a compatible remote pool; the bundled Python
+helper above remains a **loopback-only development service**, not a hardened VPS
+server. No tunnel is required for an HTTPS deployment:
+
+```sh
+export SUNO_REMOTE_POOL_URL=https://gsunopool.gunamaya.id
+export SUNO_REMOTE_POOL_TOKEN_FILE="$HOME/.suno/gsunopool-token"
+suno download CLIP_UUID --source remote-pool --format wav --output ./songs
+suno status CLIP_UUID --wait --download ./songs --source remote-pool
+```
+
+The compatible gsuno-pool API uses the same authenticated `/admin/health`,
+`POST /admin/jobs` (`content_id`, `format`), job status (`job_id`, `status`, `bytes`,
+`sha256`) and `/admin/jobs/JOB_ID/file` routes. Its unauthenticated `/healthz` only
+reports readiness, not token validity or browser/provider availability. No remote
+server implementation is installed or modified by this CLI.
+
+**yt-to-flowmusic integration:** export both variables before starting the parent
+so its child `suno` inherits them, and make the parent pass `--source remote-pool`
+to `suno` downloads or creation/status commands with `--download`. Propagate that
+source on recovery too. Environment configuration alone leaves `auto` unchanged.
+`suno` does not autoload `.env`; use explicit exports or the parent's environment
+loader. Existing local defaults and token paths are unchanged.
 
 The CLI checks authenticated admin availability before costly generation when
 remote `--download` is requested, but this is not proof a browser is online.
